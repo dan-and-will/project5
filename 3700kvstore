@@ -4,50 +4,64 @@ import sys, socket, select, time, json, random
 
 class KVstore:
 
-	def __init__(self, my_id, replica_ids):
-		self.id = my_id
-		self.replicas = replica_ids
+    def __init__(self, my_id, replica_ids):
+        self.id = my_id
+        self.leader = self.id
+        self.replicas = replica_ids
 
-		# Connect to the network. All messages to/from other replicas and clients will
-		# occur over this socket
-		self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
-		self.sock.connect(my_id)
+        # Connect to the network. All messages to/from other replicas and clients will
+        # occur over this socket
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        self.sock.connect(my_id)
 
-	def run(self):
+    def handle_get(self, msg):
+        self.sock.send(self.create_msg(msg["src"], self.leader, "fail", msg["MID"]))
 
-		# last = 0
+    def handle_put(self, msg):
+        self.sock.send(self.create_msg( msg["src"], self.leader, "fail", msg["MID"]))
 
-		while True:
-			ready = select.select([self.sock], [], [], 0.1)[0]
+    def create_msg(self, dst, leader, msg_type, mid=None):
+        msg = {"src": self.id, "dst": dst, "leader": leader,"type": msg_type}
+        if mid:
+            msg["MID"] = mid
+        return json.dumps(msg)
 
-			if ready:
-				msg_raw = self.sock.recv(32768)
+                
+    def run(self):
 
-				if len(msg_raw) == 0: continue
-				msg = json.loads(msg_raw)
+        # last = 0
 
-				# For now, ignore get() and put() from clients
-				if msg['type'] in ['get', 'put']:
-					print msg
-		                        pass
+        while True:
+            ready = select.select([self.sock], [], [], 0.1)[0]
 
-				# Handle noop messages. This may be removed from your final implementation
-				elif msg['type'] == 'noop':
-					print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
+            if ready:
+                msg_raw = self.sock.recv(32768)
 
-			# clock = time.time()
-			# if clock-last > 2:
-			# 	# Send a no-op message to a random peer every two seconds, just for fun
-			# 	# You definitely want to remove this from your implementation
-			# 	msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
-			# 	sock.send(json.dumps(msg))
-			# 	print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
-			# 	last = clock
+                if len(msg_raw) == 0: continue
+                msg = json.loads(msg_raw)
+
+                if msg["type"] == "get": 
+                    self.handle_get(msg)
+
+                elif msg["type"] == "put":
+                    self.handle_put(msg)
+                # Handle noop messages. This may be removed from your final implementation
+                elif msg['type'] == 'noop':
+                    print '%s received a NOOP from %s' % (msg['dst'], msg['src'])
+
+            # clock = time.time()
+            # if clock-last > 2:
+            #     # Send a no-op message to a random peer every two seconds, just for fun
+            #     # You definitely want to remove this from your implementation
+            #     msg = {'src': my_id, 'dst': random.choice(replica_ids), 'leader': 'FFFF', 'type': 'noop'}
+            #     sock.send(json.dumps(msg))
+            #     print '%s sending a NOOP to %s' % (msg['src'], msg['dst'])
+            #     last = clock
 
 if __name__ == '__main__':
-	# Your ID number
-	my_id = sys.argv[1]
-	# The ID numbers of all the other replicas
-	replica_ids = sys.argv[2:]
-	kvs = KVstore(my_id, replica_ids)
-	kvs.run()
+    # Your ID number
+    my_id = sys.argv[1]
+    # The ID numbers of all the other replicas
+    replica_ids = sys.argv[2:]
+    kvs = KVstore(my_id, replica_ids)
+    kvs.run()
