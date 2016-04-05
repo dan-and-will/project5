@@ -15,6 +15,8 @@ class KVstore:
         self.last_leader_hb = time.time()
         self.replicas = replica_ids
         self.quorum = (len(self.replicas) + 1) / 2 + 1
+        self.log = []
+        self.state_machine = {}
 
         # Connect to the network. All messages to/from other replicas and clients will
         # occur over this socket
@@ -76,6 +78,8 @@ class KVstore:
                 self.term = msg['term']
 
         elif self.state == CANDIDATE:
+            # if msg_type in ('get', 'put',):
+            #     print msg['type']
             if msg_type == 'vote':
                 self.votes += 1
                 if self.votes + 1 >= self.quorum:
@@ -87,10 +91,18 @@ class KVstore:
 
         elif self.state == LEADER:
             if msg_type == 'get':
-                msg = json.dumps({'src': self.id, 'dst': msg['src'], 'leader': self.id, 'type': 'fail', 'MID': msg['MID']})
+                try:
+                    val = self.state_machine[msg['key']]
+                    msg = json.dumps({'src': self.id, 'dst': msg['src'], 'leader': self.id, 'type': 'ok', 'MID': msg['MID'], 'value': val})
+                except:
+                    msg = json.dumps({'src': self.id, 'dst': msg['src'], 'leader': self.id, 'type': 'fail', 'MID': msg['MID']})
                 self.sock.send(msg)
             elif msg_type == 'put':
-                msg = json.dumps({'src': self.id, 'dst': msg['src'], 'leader': self.id, 'type': 'fail', 'MID': msg['MID']})
+                try:
+                    self.state_machine[msg['key']] = msg['value']
+                    msg = json.dumps({'src': self.id, 'dst': msg['src'], 'leader': self.id, 'type': 'ok', 'MID': msg['MID']})
+                except:
+                    msg = json.dumps({'src': self.id, 'dst': msg['src'], 'leader': self.id, 'type': 'fail', 'MID': msg['MID']})
                 self.sock.send(msg)
             elif msg_type == 'vote_request':
                 if not self.in_election and msg['term'] > self.term:
