@@ -40,7 +40,7 @@ class KVstore:
 
     def set_state(self, state):
         self.state = state
-        self.has_voted = False
+        self.voted_for = None
         if self.state == FOLLOWER:
             self.timeout = random.randint(300, 500) / 1000.0
             self.last_leader_hb = time.time()
@@ -110,11 +110,19 @@ class KVstore:
         self.sock.send(msg)
 
     def cast_vote(self, candidate_id):
-        self.has_voted = True
+        self.voted_for = candidate_id
         msg = json.dumps({'src': self.id,
                           'dst': candidate_id,
                           'leader': 'FFFF',
                           'type': 'vote'
+                          })
+        self.sock.send(msg)
+
+    def reject_vote(self, candidate_id):
+        msg = json.dumps({'src': self.id,
+                          'dst': candidate_id,
+                          'leader': 'FFFF',
+                          'type': 'vote_fail'
                           })
         self.sock.send(msg)
 
@@ -133,10 +141,16 @@ class KVstore:
         self.commit_index = index
 
     def start_election(self):
-        self.has_voted = True
+        self.voted_for = self.id
         self.term += 1
         self.set_state(CANDIDATE)
         self.send_vote_request()
+
+    def update_log(self, entries):
+        for entry in entries:
+            key, val, idx = entry.split(":")
+            new_entry = LogEntry(key, val, idx)
+            
 
     def handle_msg(self, msg):
         msg_type = msg['type']
@@ -145,9 +159,12 @@ class KVstore:
                 self.redirect(msg)
             elif msg_type == 'vote_request':
                 if self.term <= msg['term']:
-                    if not self.has_voted:
+                    if self.voted_for is None or self.voted_for == msg['src']:
                         if len(self.log) -1 <= msg['lastLogIndex'] and self.log[-1].term <= msg['lastLogTerm']:
                             self.cast_vote(msg['src'])
+                        else:
+                            self.reject_vote(msg['src'])
+                    
             elif msg_type == 'append_entries':
                 self.last_leader_hb = time.time()
                 self.leader = msg['src']
@@ -155,8 +172,9 @@ class KVstore:
                     self.term = msg['term']
                 prev_index = msg['prev_index']
                 prev_term = msg['prev_term']
-                if len(self.log) - 1 == prev_index:
+                if len(self.log) - 1 == prev_index: #follower's log is the same length as the leaders....
                     if self.log[prev_index].term == prev_term:
+                        #update log
                         self.log.extend(msg['entries'])
                         self.commit(msg['commit'])
                         self.send_append_success(self.term, len(self.log) - 1)
@@ -192,7 +210,7 @@ class KVstore:
                     msg = json.dumps({'src': self.id, 'dst': msg['src'], 'leader': self.id, 'type': 'fail', 'MID': msg['MID']})
                 self.sock.send(msg)
             elif msg_type == 'vote_request':
-                if not self.has_voted and msg['term'] > self.term:
+                if self.voted_for is None and msg['term'] > self.term:
                     self.cast_vote(msg['src'])
             elif msg_type == 'append_entries':
                 if self.term < msg['term']:
@@ -218,7 +236,7 @@ class KVstore:
             to = time.time() - self.timeout
             if self.state == FOLLOWER:
                 if to >= self.last_leader_hb:
-                    if not self.has_voted:
+                    if self.voted_for is None:
                         self.start_election()
 
             elif self.state == CANDIDATE:
