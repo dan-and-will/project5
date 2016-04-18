@@ -6,6 +6,19 @@ LEADER = 1
 CANDIDATE = 2
 FOLLOWER = 3
 
+class LogEntry:
+
+    def __init__(self, key, value, term):
+        self.key = key
+        self.value = value
+        self.term = int(term)
+
+    def __str__(self):
+        return "{key}:{value}:{term}".format(key=self.key, value=self.value, term=self.term)
+
+    def parse(entry):
+        return LogEntry(*entry.split(':'))
+
 class KVstore:
 
     def __init__(self, my_id, replica_ids):
@@ -15,7 +28,7 @@ class KVstore:
         self.last_leader_hb = time.time()
         self.replicas = replica_ids
         self.quorum = (len(self.replicas) + 1) / 2 + 1
-        self.log = ["*:*:0"]
+        self.log = [LogEntry('*', '*', 0)]
         self.commit_index = 0
         self.state_machine = {}
         self.replica_indices = {rep_id: 0 for rep_id in self.replicas}
@@ -27,7 +40,7 @@ class KVstore:
 
     def set_state(self, state):
         self.state = state
-        self.in_election = False
+        self.has_voted = False
         if self.state == FOLLOWER:
             self.timeout = random.randint(300, 500) / 1000.0
             self.last_leader_hb = time.time()
@@ -42,22 +55,16 @@ class KVstore:
             self.timeout = 0.25
             self.RPC_sent = 0
 
-    def create_log_entry(self, key, value, term):
-        return "{key}:{value}:{term}".format(key=key, value=value, term=term)
-
-    def parse_log_entry(self, entry):
-        key, value, term = entry.split(':')
-        return key, value, int(term)
-
     def apply_log_entry(self, index=None):
         if index is None:
             index = -1 # last element
         entry = self.log[index]
-        key, value, _ = self.parse_log_entry(entry)
-        self.state_machine[key] = value
+        self.state_machine[entry.key] = entry.value
 
-    def send_append_entries(self, prev_index): #data=None, index=None, term=None):
-        prev_term = self.parse_log_entry(self.log[prev_index])[2]
+    def send_append_entries(self, prev_index=None): #data=None, index=None, term=None):
+        if prev_index is None:
+            prev_index = len(self.log) - 1
+        prev_term = self.log[prev_index].term
         msg = json.dumps({'src': self.id,
                           'dst': 'FFFF',
                           'leader': self.id,
@@ -65,20 +72,19 @@ class KVstore:
                           'term': self.term,
                           'prev_index': prev_index,
                           'prev_term': prev_term,
-                          'entries': self.log[prev_index + 1:],
+                          'entries': [str(e) for e in self.log[prev_index + 1:]],
                           'commit': self.commit_index
                           })
         self.sock.send(msg)
         self.RPC_sent = time.time()
 
     def send_append_success(self, term, index):
-        # _, _, term = self.parse_log_entry(self.log[index])
         msg = json.dumps({'src': self.id,
                           'dst': self.leader,
                           'leader': self.leader,
                           'type': 'append_success',
                           'term': term,
-                          'index', index
+                          'index': index
                           })
         self.sock.send(msg)
 
@@ -88,7 +94,7 @@ class KVstore:
                           'leader': self.leader,
                           'type': 'append_fail',
                           'term': term,
-                          'index', index
+                          'index': index
                           })
         self.sock.send(msg)
 
@@ -97,36 +103,37 @@ class KVstore:
                           'dst': 'FFFF',
                           'leader': self.leader,
                           'type': 'vote_request',
-                          'term': self.term
+                          'term': self.term,
+                          'lastLogIndex': len(self.log) - 1,
+                          'lastLogTerm': self.log[-1].term
                           })
         self.sock.send(msg)
 
     def cast_vote(self, candidate_id):
-        self.in_election = True
+        self.has_voted = True
         msg = json.dumps({'src': self.id,
                           'dst': candidate_id,
-                          'leader':'FFFF'',
+                          'leader': 'FFFF',
                           'type': 'vote'
                           })
         self.sock.send(msg)
 
-    def redirect(self, msg):
+    def redirect(self, client_msg):
         msg = json.dumps({'src': self.id,
-                          'dst': msg['src'],
+                          'dst': client_msg['src'],
                           'leader': self.leader,
                           'type': 'redirect',
-                          'MID': msg['MID']
+                          'MID': client_msg['MID']
                           })
         self.sock.send(msg)
 
     def commit(self, index):
         for entry in self.log[self.commit_index + 1:index + 1]:
-            key, value, _ = self.parse_log_entry(entry)
-            self.state_machine[key] = value
+            self.state_machine[entry.key] = entry.value
         self.commit_index = index
 
     def start_election(self):
-        self.in_election = True
+        self.has_voted = True
         self.term += 1
         self.set_state(CANDIDATE)
         self.send_vote_request()
@@ -137,28 +144,27 @@ class KVstore:
             if msg_type in ('get', 'put',):
                 self.redirect(msg)
             elif msg_type == 'vote_request':
-                if not self.in_election and self.term < msg['term']:
-                    self.cast_vote(msg['src'])
+                if self.term <= msg['term']:
+                    if not self.has_voted:
+                        if len(self.log) -1 <= msg['lastLogIndex'] and self.log[-1].term <= msg['lastLogTerm']:
+                            self.cast_vote(msg['src'])
             elif msg_type == 'append_entries':
                 self.last_leader_hb = time.time()
                 self.leader = msg['src']
-                if self.term < msg['term']
+                if self.term < msg['term']:
                     self.term = msg['term']
                 prev_index = msg['prev_index']
                 prev_term = msg['prev_term']
                 if len(self.log) - 1 == prev_index:
-                    if self.parse_log_entry(self.log[prev_index])[2] == prev_term:
+                    if self.log[prev_index].term == prev_term:
                         self.log.extend(msg['entries'])
                         self.commit(msg['commit'])
-                        self.send_append_success(new_term, new_index)
+                        self.send_append_success(self.term, len(self.log) - 1)
                 else:
                     commit_entry = self.log[self.commit_index]
-                    _, _, commit_term = self.parse_log_entry(commit_entry)
-                    self.send_append_fail(commit_term, self.commit_index)
+                    self.send_append_fail(commit_entry.term, self.commit_index)
 
         elif self.state == CANDIDATE:
-            # if msg_type in ('get', 'put',):
-            #     print msg['type']
             if msg_type == 'vote':
                 self.votes += 1
                 if self.votes + 1 >= self.quorum:
@@ -186,7 +192,7 @@ class KVstore:
                     msg = json.dumps({'src': self.id, 'dst': msg['src'], 'leader': self.id, 'type': 'fail', 'MID': msg['MID']})
                 self.sock.send(msg)
             elif msg_type == 'vote_request':
-                if not self.in_election and msg['term'] > self.term:
+                if not self.has_voted and msg['term'] > self.term:
                     self.cast_vote(msg['src'])
             elif msg_type == 'append_entries':
                 if self.term < msg['term']:
@@ -212,7 +218,7 @@ class KVstore:
             to = time.time() - self.timeout
             if self.state == FOLLOWER:
                 if to >= self.last_leader_hb:
-                    if not self.in_election:
+                    if not self.has_voted:
                         self.start_election()
 
             elif self.state == CANDIDATE:
