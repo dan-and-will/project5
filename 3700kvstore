@@ -67,7 +67,7 @@ class KVstore:
                               'term': self.term,
                               'prev_index': prev_index,
                               'prev_term': prev_term,
-                              'entries': [str(e) for e in self.log[prev_index + 1:]],
+                              'entries': [str(e) for e in self.log[prev_index + 1:prev_index + 21]],
                               'commit': self.commit_index
                               })
             self.sock.send(msg)
