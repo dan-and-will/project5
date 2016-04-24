@@ -1,0 +1,23 @@
+Dan Russotto
+Will DeRivera
+
+
+We started out by handling get and put requests from clients, which
+initially was just sending the "fail" message back. Then we introduced
+the concept of state for the servers (i.e. Follower, Leader, Candidate)
+and sent redirects if we were not the leader. Next we worked on making 
+elections and sending the periodic heartbeats from leaders to followers
+to prevent unnecessary elections. We then started to implement the state
+machine that would only affect the leader, since we hadn't yet worked
+on replication. The most challenging part at that point is correctly
+understanding the protcocol and the different behaviors of servers 
+depending on whether they are a leader, follower, or candidate.
+
+Finally, we started to work on sending out the AppendEntries RPCs
+that actually contained data. We immediately sent out multiple
+entries to the logs at once to improve performance and avoid
+latency failures in the tests. Our biggest challenge, and one that
+we were never quite able to overcome, was balance maintaining consistency
+in the way that Raft mandates without sacrificing too much efficiency.
+In the end we did not manage to pass all the tests due to insufficient
+handling of harder cases where leader's crash. 
