@@ -7,6 +7,7 @@ CANDIDATE = 2
 FOLLOWER = 3
 
 class LogEntry:
+    """class to make handling log entries easier"""
 
     def __init__(self, key, value, term):
         self.key = key
@@ -42,6 +43,7 @@ class KVstore:
         self.sock.connect(my_id)
 
     def set_state(self, state):
+        """sets up node to handle appropriate work for given state"""
         self.state = state
         self.voted_for = None
         if self.state == FOLLOWER:
@@ -58,6 +60,7 @@ class KVstore:
             self.RPC_sent = 0
 
     def send_append_entries(self): #data=None, index=None, term=None):
+        """handle sending append entry RPCs"""
         for replica, prev_index in self.replica_append_indices.iteritems():
             prev_term = self.log[prev_index].term
             msg = json.dumps({'src': self.id,
@@ -75,6 +78,7 @@ class KVstore:
         self.RPC_sent = time.time()
 
     def send_append_result(self, result, append_index):
+        """handle responding to append entry RPCs"""
         msg = json.dumps({'src': self.id,
                           'dst': self.leader,
                           'leader': self.leader,
@@ -88,6 +92,7 @@ class KVstore:
         self.sock.send(msg)
 
     def send_vote_request(self):
+        """handle sending request vote RPCs"""
         msg = json.dumps({'src': self.id,
                           'dst': 'FFFF',
                           'leader': self.leader,
@@ -99,6 +104,7 @@ class KVstore:
         self.sock.send(msg)
 
     def cast_vote(self, candidate_id, result):
+        """handle responding to request vote RPCs"""
         self.voted_for = candidate_id
         msg = json.dumps({'src': self.id,
                           'dst': candidate_id,
@@ -109,6 +115,7 @@ class KVstore:
         self.sock.send(msg)
 
     def redirect(self, client_msg):
+        """respond to client requests with leader id"""
         msg = json.dumps({'src': self.id,
                           'dst': client_msg['src'],
                           'leader': self.leader,
@@ -118,6 +125,7 @@ class KVstore:
         self.sock.send(msg)
 
     def commit(self, index):
+        """commit log entries to state machine"""
         if self.state == FOLLOWER:
             pass #print len(self.log), self.commit_index, index
         for entry in self.log[self.commit_index + 1:index + 1]:
@@ -129,6 +137,7 @@ class KVstore:
         #     print 'State: {s}'.format(s=self.state)
 
     def respond_to_puts(self, commit_index):
+        """inform clients of sucessful puts"""
         for index, put in self.puts.items():
             if index <= commit_index:
                 msg = json.dumps({'src': self.id, 'dst': put[1], 'leader': self.id, 'type': 'ok', 'MID': put[0]})
@@ -137,6 +146,7 @@ class KVstore:
                 del self.puts[index]
 
     def start_election(self):
+        """set up candidate for election"""
         self.voted_for = self.id
         self.term += 1
         self.set_state(CANDIDATE)
@@ -144,6 +154,7 @@ class KVstore:
         self.send_vote_request()
 
     def handle_msg(self, msg):
+        """act on message based on replica state and message type"""
         msg_type = msg['type']
         if self.state == FOLLOWER:
             if msg_type in ( 'put',):
@@ -219,6 +230,7 @@ class KVstore:
                 # print self.replica_append_indices
 
     def run(self):
+        """perform actions based on replica state"""
         while True:
             ready = select.select([self.sock], [], [], 0.1)[0]
             if ready:
